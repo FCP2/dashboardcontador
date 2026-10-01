@@ -1,0 +1,14 @@
+{
+  "name": "voces-que-corren-dashboard",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Dashboard operativo de solo lectura para Voces que Corren",
+  "scripts": {
+    "dev": "node --watch server.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "pg": "^8.13.3"
+  }
+}
