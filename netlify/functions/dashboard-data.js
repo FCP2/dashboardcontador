@@ -2,6 +2,15 @@ const { Pool } = require('pg');
 
 let pool;
 
+// Un registro solo ocupa cupo cuando terminó el flujo de confirmación por correo
+// y ya tiene folio emitido. El estatus por sí solo no es suficiente para el KPI.
+const CONFIRMED_SQL = `
+  r.estatus = 'confirmado'
+  AND r.confirmado_at IS NOT NULL
+  AND r.folio IS NOT NULL
+  AND r.numero_folio IS NOT NULL
+`;
+
 function getPool() {
   if (!process.env.DATABASE_URL) {
     throw new Error('DATABASE_URL no está configurada en Netlify.');
@@ -38,20 +47,21 @@ exports.handler = async () => {
     const [summary, categories, profile, sizes, municipalities, recent] = await Promise.all([
       db.query(`
         SELECT
-          COUNT(r.id)::INTEGER AS total,
-          COUNT(r.id) FILTER (WHERE r.estatus = 'confirmado')::INTEGER AS confirmados,
-          COUNT(r.id) FILTER (WHERE r.estatus = 'pendiente_confirmacion')::INTEGER AS pendientes,
-          COUNT(r.id) FILTER (WHERE p.es_menor_edad IS TRUE)::INTEGER AS menores,
-          COUNT(r.id) FILTER (WHERE p.identidad_lgbtiq = 'si')::INTEGER AS lgbtiq_si
+          COUNT(r.id)::INTEGER AS registrados,
+          COUNT(r.id) FILTER (WHERE ${CONFIRMED_SQL})::INTEGER AS total,
+          COUNT(r.id) FILTER (WHERE ${CONFIRMED_SQL})::INTEGER AS confirmados,
+          COUNT(r.id) FILTER (WHERE NOT (${CONFIRMED_SQL}))::INTEGER AS pendientes,
+          COUNT(r.id) FILTER (WHERE ${CONFIRMED_SQL} AND p.es_menor_edad IS TRUE)::INTEGER AS menores,
+          COUNT(r.id) FILTER (WHERE ${CONFIRMED_SQL} AND p.identidad_lgbtiq = 'si')::INTEGER AS lgbtiq_si
         FROM registros r
         INNER JOIN participantes p ON p.id = r.participante_id
         WHERE r.evento_id = $1
       `, [event.id]),
       db.query(`
         SELECT p.categoria_competencia AS categoria,
-               COUNT(r.id)::INTEGER AS total,
-               COUNT(r.id) FILTER (WHERE r.estatus = 'confirmado')::INTEGER AS confirmados,
-               COUNT(r.id) FILTER (WHERE r.estatus = 'pendiente_confirmacion')::INTEGER AS pendientes,
+               COUNT(r.id) FILTER (WHERE ${CONFIRMED_SQL})::INTEGER AS total,
+               COUNT(r.id) FILTER (WHERE ${CONFIRMED_SQL})::INTEGER AS confirmados,
+               COUNT(r.id) FILTER (WHERE NOT (${CONFIRMED_SQL}))::INTEGER AS pendientes,
                COALESCE(MAX(ce.capacidad), 0)::INTEGER AS meta
         FROM registros r
         INNER JOIN participantes p ON p.id = r.participante_id
@@ -65,7 +75,7 @@ exports.handler = async () => {
       `, [event.id]),
       db.query(`
         SELECT
-          COUNT(*) FILTER (WHERE p.identidad_lgbtiq IS NULL)::INTEGER AS lgbtiq_sin_respuesta
+          COUNT(*) FILTER (WHERE ${CONFIRMED_SQL} AND p.identidad_lgbtiq IS NULL)::INTEGER AS lgbtiq_sin_respuesta
         FROM registros r
         INNER JOIN participantes p ON p.id = r.participante_id
         WHERE r.evento_id = $1
@@ -73,7 +83,7 @@ exports.handler = async () => {
       db.query(`
         SELECT r.talla, COUNT(*)::INTEGER AS total
         FROM registros r
-        WHERE r.evento_id = $1
+        WHERE r.evento_id = $1 AND ${CONFIRMED_SQL}
         GROUP BY r.talla
         ORDER BY CASE r.talla WHEN 'CH' THEN 1 WHEN 'M' THEN 2 WHEN 'G' THEN 3 WHEN 'XG' THEN 4 ELSE 5 END
       `, [event.id]),
@@ -83,7 +93,7 @@ exports.handler = async () => {
         FROM registros r
         INNER JOIN participantes p ON p.id = r.participante_id
         LEFT JOIN municipios m ON m.id = p.municipio_id
-        WHERE r.evento_id = $1
+        WHERE r.evento_id = $1 AND ${CONFIRMED_SQL}
         GROUP BY COALESCE(m.nombre, p.ciudad_foranea, 'Sin procedencia')
         ORDER BY total DESC, nombre
         LIMIT 8
